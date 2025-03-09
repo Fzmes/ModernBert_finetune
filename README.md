@@ -1,114 +1,332 @@
-# BERT Text Classification Model
+# Fine-tuning ModernBERT for Text Classification with PyTorch Lightning
 
-This repository contains a PyTorch Lightning implementation of a BERT-based text classification model using the ModernBERT architecture. The model is designed for multi-class text classification tasks and includes features for training, validation, and testing.
+In this technical guide, we'll explore how to fine-tune ModernBERT for text classification tasks using PyTorch Lightning. We'll cover the implementation details, model architecture, and best practices for training and evaluation.
 
-## Features
+## Understanding the Architecture
 
-- Built with PyTorch Lightning for efficient training
-- Uses ModernBERT-base as the backbone model
-- Supports multi-class classification
-- Includes accuracy metrics for training, validation, and testing
-- Configurable learning rate and number of classes
-- Model checkpointing and saving capabilities
+Our implementation leverages the power of ModernBERT's pre-trained language model combined with PyTorch Lightning's organized training structure. Here's what makes our implementation special:
 
-## Installation
+1. **ModernBERT Base**: We use the `answerdotai/ModernBERT-base` model as our backbone, which provides powerful contextual representations. This model is loaded using the Hugging Face `AutoModelForSequenceClassification` class, which automatically handles the appropriate model architecture.
 
-1. Clone the repository:
+2. **Classification Head**: The `AutoModelForSequenceClassification` adds a classification layer on top of BERT's [CLS] token output. This is configured with the appropriate number of output classes via the `num_labels` parameter.
+
+3. **PyTorch Lightning Structure**: Our implementation uses PyTorch Lightning's `LightningModule` class, which organizes the code into well-defined methods:
+   - `forward()`: Processes input_ids and attention_mask through the model and returns logits
+   - `training_step()`, `validation_step()`, `test_step()`: Handle the training, validation, and testing loops
+   - `configure_optimizers()`: Sets up the AdamW optimizer with an appropriate learning rate
+
+4. **Metrics Tracking**: We use torchmetrics' `Accuracy` class to track performance metrics during training, validation, and testing phases. These metrics are automatically logged and can be visualized.
+
+5. **Tokenization and Input Processing**: The model expects tokenized inputs with `input_ids` and `attention_mask` tensors, which are processed by the BERT model to generate contextual embeddings.
+
+## Implementation Details
+
+### Setting Up the Environment
+
+First, let's set up our development environment using Poetry for dependency management:
+
 ```bash
+# Install Poetry
+curl -sSL https://install.python-poetry.org | python3 -
+
+# Clone and set up the project
 git clone <repository-url>
 cd finetuning_bert
-```
 
-2. Install Poetry (if not already installed):
-```bash
-curl -sSL https://install.python-poetry.org | python3 -
-```
-
-3. Install dependencies using Poetry:
-```bash
+# Install dependencies
 poetry install
-```
-
-4. Activate the Poetry virtual environment:
-```bash
 poetry shell
 ```
 
-## Model Architecture
+### Model Implementation
 
-The model is implemented in `model.py` and consists of:
-- A BERT-based encoder (ModernBERT-base)
-- A classification head for multi-class prediction
-- Training, validation, and testing loops with accuracy metrics
-- AdamW optimizer with configurable learning rate
+Let's break down the key components of our `BertClassifier` implementation:
 
-## Usage
-
-### Training
-
-1. Prepare your dataset in the following format:
 ```python
-dataset = {
-    'input_ids': tensor,  # Tokenized input sequences
-    'attention_mask': tensor,  # Attention masks
-    'labels': tensor  # Classification labels
-}
+import pytorch_lightning as pl
+from transformers import AutoModelForSequenceClassification
+from torchmetrics import Accuracy
+
+class BertClassifier(pl.LightningModule):
+    def __init__(self, n_classes: int, learning_rate: float = 2e-5):
+        super().__init__()
+        self.model = AutoModelForSequenceClassification.from_pretrained('answerdotai/ModernBERT-base', num_labels=n_classes)
+        self.learning_rate = learning_rate
+        
+        # Metrics
+        self.train_accuracy = Accuracy(task='multiclass', num_classes=n_classes)
+        self.val_accuracy = Accuracy(task='multiclass', num_classes=n_classes)
+        self.test_accuracy = Accuracy(task='multiclass', num_classes=n_classes)
+
+    def forward(self, input_ids, attention_mask):
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+        return outputs.logits
+
+    def training_step(self, batch, batch_idx):
+        input_ids = batch['input_ids']
+        attention_mask = batch['attention_mask']
+        labels = batch['labels']
+        
+        logits = self(input_ids, attention_mask)
+        loss = F.cross_entropy(logits, labels)
+        
+        # Calculate accuracy
+        preds = torch.argmax(logits, dim=1)
+        self.train_accuracy(preds, labels)
+        
+        # Log metrics
+        self.log('train_loss', loss, prog_bar=True)
+        self.log('train_acc', self.train_accuracy, prog_bar=True)
+        
+        return loss
 ```
 
-2. Initialize and train the model:
-```python
-from model import BertClassifier
+### Data Processing
 
-# Initialize the model
+We use a custom `TextClassificationDataModule` for efficient data handling:
+
+```python
+from pytorch_lightning import LightningDataModule
+from transformers import AutoTokenizer
+
+class TextClassificationDataModule(LightningDataModule):
+    def __init__(self, train_df=None, val_df=None, test_df=None, 
+                 tokenizer_name='bert-base-uncased', batch_size=16, max_length=128):
+        super().__init__()
+        self.train_df = train_df
+        self.val_df = val_df
+        self.test_df = test_df
+        self.batch_size = batch_size
+        self.max_length = max_length
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+```
+
+### Training Pipeline
+
+Here's how to set up the training pipeline:
+
+```python
+from torch.utils.data import DataLoader
+import pytorch_lightning as pl
+
+# Prepare your dataset
+train_df, val_df, test_df = prepare_data('sample_dataset.csv')
+data_module = TextClassificationDataModule(
+    train_df=train_df,
+    val_df=val_df,
+    test_df=test_df,
+    batch_size=16
+)
+
+# Initialize model
 model = BertClassifier(
-    n_classes=<number_of_classes>,
-    learning_rate=2e-5  # Adjust as needed
+    n_classes=2,  # Adjust based on your task
+    learning_rate=2e-5
 )
 
-# Train using PyTorch Lightning Trainer
+# Configure trainer
 trainer = pl.Trainer(
-    max_epochs=10,
-    accelerator='gpu',  # Use 'cpu' if no GPU available
-    devices=1
+    max_epochs=3,
+    accelerator='auto',  # Automatically detect hardware
+    devices=1,
+    enable_progress_bar=True,
+    enable_model_summary=True
 )
 
-trainer.fit(model, train_dataloader, val_dataloader)
+# Train the model
+trainer.fit(model, data_module)
 ```
 
-### Evaluation
+## Best Practices and Tips
 
-Evaluate the model on test data:
+1. **Learning Rate**: Start with a small learning rate (2e-5 to 5e-5) to prevent catastrophic forgetting.
+2. **Batch Size**: Use the largest batch size that fits in your GPU memory (typically 16-32).
+3. **Gradient Clipping**: Consider adding gradient clipping to prevent exploding gradients:
 ```python
-trainer.test(model, test_dataloader)
+trainer = pl.Trainer(
+    gradient_clip_val=1.0,
+    # other parameters...
+)
 ```
 
-### Saving and Loading
+## Monitoring Training Progress
 
-Save the model:
-```python
-model.save_model('path/to/save')
-```
+PyTorch Lightning automatically logs these metrics during training:
 
-## Model Configuration
-
-You can configure the following parameters when initializing the model:
-
-- `n_classes`: Number of output classes (required)
-- `learning_rate`: Learning rate for the AdamW optimizer (default: 2e-5)
-
-## Metrics
-
-The model tracks the following metrics during training:
 - Training Loss
 - Training Accuracy
 - Validation Loss
 - Validation Accuracy
-- Test Loss
-- Test Accuracy
 
-## Contributing
+You can visualize these metrics using TensorBoard, which is automatically set up by PyTorch Lightning. The logs are stored in the 'lightning_logs' directory by default:
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+```python
+trainer = pl.Trainer(
+    max_epochs=3,
+    accelerator='auto',
+    devices=1,
+    enable_progress_bar=True,
+    enable_model_summary=True,
+    # TensorBoard logging is enabled by default
+)
+```
+
+## Model Evaluation
+
+Evaluate your model on the test set:
+
+```python
+# Run evaluation
+results = trainer.test(model, data_module)
+print(f"Test Accuracy: {results[0]['test_acc']:.4f}")
+```
+
+## Saving and Loading Models
+
+```python
+# Save the model and tokenizer
+model.save_model(os.path.join('saved_model', 'model'))  # This saves both checkpoint and config
+data_module.tokenizer.save_pretrained(os.path.join('saved_model', 'tokenizer'))
+
+# Load the model
+model = BertClassifier.load_from_checkpoint(
+    os.path.join('saved_model', 'model.ckpt'),
+    n_classes=2  # Make sure this matches your training configuration
+)
+```
+
+## Inference with the Trained Model
+
+Once you've trained and saved your model, you can use it for inference on new text data. Our implementation provides a convenient `TextClassifier` class that handles all the necessary steps:
+
+```python
+import torch
+from transformers import AutoTokenizer
+from model import BertClassifier
+import os
+
+class TextClassifier:
+    def __init__(self, model_path='saved_model'):
+        # Load the saved model and tokenizer
+        self.model = BertClassifier.load_from_checkpoint(
+            os.path.join(model_path, 'model.ckpt'),
+            n_classes=2  # Make sure this matches your training configuration
+        )
+        self.tokenizer = AutoTokenizer.from_pretrained(os.path.join(model_path, 'tokenizer'))
+        self.model.eval()  # Set the model to evaluation mode
+        
+        # Move model to GPU if available
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model = self.model.to(self.device)
+
+    def preprocess_text(self, text, max_length=128):
+        # Tokenize the input text
+        encoding = self.tokenizer.encode_plus(
+            text,
+            add_special_tokens=True,
+            max_length=max_length,
+            return_token_type_ids=False,
+            padding='max_length',
+            truncation=True,
+            return_attention_mask=True,
+            return_tensors='pt'
+        )
+        
+        return {
+            'input_ids': encoding['input_ids'].to(self.device),
+            'attention_mask': encoding['attention_mask'].to(self.device)
+        }
+
+    @torch.no_grad()
+    def predict(self, text):
+        # Preprocess the input text
+        inputs = self.preprocess_text(text)
+        
+        # Get model predictions
+        outputs = self.model(**inputs)
+        probabilities = torch.softmax(outputs, dim=1)
+        prediction = torch.argmax(probabilities, dim=1)
+        
+        return {
+            'prediction': prediction.item(),
+            'probabilities': probabilities[0].tolist()
+        }
+```
+
+### Text Preprocessing
+
+The `TextClassifier` includes a method to preprocess text inputs, handling tokenization and preparing the tensors for the model:
+
+```python
+def preprocess_text(self, text, max_length=128):
+    # Tokenize the input text
+    encoding = self.tokenizer.encode_plus(
+        text,
+        add_special_tokens=True,
+        max_length=max_length,
+        return_token_type_ids=False,
+        padding='max_length',
+        truncation=True,
+        return_attention_mask=True,
+        return_tensors='pt'
+    )
+    
+    return {
+        'input_ids': encoding['input_ids'].to(self.device),
+        'attention_mask': encoding['attention_mask'].to(self.device)
+    }
+```
+
+### Making Predictions
+
+The `predict` method handles the entire inference pipeline, from preprocessing to returning predictions and probabilities:
+
+```python
+@torch.no_grad()
+def predict(self, text):
+    # Preprocess the input text
+    inputs = self.preprocess_text(text)
+    
+    # Get model predictions
+    outputs = self.model(**inputs)
+    probabilities = torch.softmax(outputs, dim=1)
+    prediction = torch.argmax(probabilities, dim=1)
+    
+    return {
+        'prediction': prediction.item(),
+        'probabilities': probabilities[0].tolist()
+    }
+```
+
+### Example Usage
+
+Here's how to use the `TextClassifier` for inference:
+
+```python
+# Initialize the classifier
+classifier = TextClassifier()
+
+# Example text for prediction
+text = "I really like the movie I watched last night."
+
+# Get prediction
+result = classifier.predict(text)
+print(f"Prediction: {result['prediction']}")
+print(f"Probabilities: {result['probabilities']}")
+```
+
+The `prediction` value corresponds to the class index (e.g., 0 for negative, 1 for positive in a binary sentiment classification task), while `probabilities` contains the confidence scores for each class.
+
+## Conclusion
+
+Fine-tuning ModernBERT using PyTorch Lightning provides a clean and efficient way to create powerful text classifiers. The combination of BERT's pre-trained knowledge and PyTorch Lightning's organized training structure makes it easier to implement and experiment with different configurations.
+
+Key takeaways:
+- Use Poetry for clean dependency management
+- Leverage PyTorch Lightning's built-in features for organized training
+- Monitor training metrics for optimal performance
+- Follow best practices for learning rates and batch sizes
+- Implement a robust inference pipeline for real-world applications
 
 ## License
 
