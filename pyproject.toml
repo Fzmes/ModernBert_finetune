@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "ModernBert_finetune"
+name = "ModernBert_finetune1"
 version = "0.1.0"
 description = "A BERT text classification project using PyTorch Lightning"
 authors = ["fatimaezzahre.1@gmail.com"]
