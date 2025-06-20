@@ -1,8 +1,8 @@
 [tool.poetry]
-name = "finetuning_bert"
+name = "ModernBert_finetune"
 version = "0.1.0"
 description = "A BERT text classification project using PyTorch Lightning"
-authors = ["Your Name <your.email@example.com>"]
+authors = ["fatimaezzahre.1@gmail.com"]
 
 [tool.poetry.dependencies]
 python = ">=3.11,<3.13"
